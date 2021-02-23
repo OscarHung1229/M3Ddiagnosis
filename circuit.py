@@ -502,7 +502,8 @@ class Circuit:
 		#Levelization after parsing scan chains
 		self.levelize()
 		#self.dumpSTILprefix(infile)
-		self.injectfault()
+		self.dumpInjectFile()
+		return
 
 		for line in f:
 			if "pattern 0" in line:
@@ -643,9 +644,6 @@ class Circuit:
 							else:
 								assert(False)
 
-						if g.name == "r909_reg":
-							print("Start")
-							print(g.pins["Q"].value)
 					
 				else:
 					for g in gates:
@@ -659,7 +657,6 @@ class Circuit:
 					if g.name == self.faulty_gate and not first:
 						if g.pins[self.faulty_pin] in g.outpin:
 							g.ev(first)
-							print(g.pins[self.faulty_pin].value)
 							if self.defect == "str" and g.pins[self.faulty_pin].value == 3:
 								g.pins[self.faulty_pin].set_value(0,first)
 							elif self.defect == "stf" and g.pins[self.faulty_pin].value == 4:
@@ -668,11 +665,13 @@ class Circuit:
 							if self.defect == "str" and g.pins[self.faulty_pin].value == 3:
 								g.pins[self.faulty_pin].set_value(0,first)
 								g.ev(first)
-								#g.pins[self.faulty_pin].set_value(3,first)
+								g.pins[self.faulty_pin].set_value(3,first)
 							elif self.defect == "stf" and g.pins[self.faulty_pin].value == 4:
 								g.pins[self.faulty_pin].set_value(1,first)
 								g.ev(first)
-								#g.pins[self.faulty_pin].set_value(4,first)
+								g.pins[self.faulty_pin].set_value(4,first)
+							else:
+								g.ev(first)
 						continue
 						
 					g.ev(first)
@@ -891,8 +890,32 @@ class Circuit:
 
 	def injectfault(self):
 		self.faulty_gate = "U51988"
-		self.faulty_pin = "ZN"
+		self.faulty_pin = "B1"
 	 	self.defect = "str"
+	
+	def dumpInjectFile(self):
+		fout = open(self.design+"/"+self.design+"_inject.dat", "w")
+		fout.write("Fault type  Faulty pin  Gate Level\n")
+		l = [i for i in self.Gate if "Dummy" not in i and "SDFF" not in self.Gate[i].gtype and "reset" not in i and "test_se" not in i]
+		
+		inject = random.sample(l, 10000)
+		for name in inject:
+			gate = self.Gate[name]
+			pin = random.sample(gate.pins, 1)[0]
+			if "SDFF" in gate.gtype:
+				l_pin = ["D", "Q"]
+				if "QN" in gate.pins:
+					l_pin.append("QN")
+				pin = random.sample(l_pin, 1)[0]
+			fault = ""
+			if random.random() <= 0.5:
+				fault = "r"
+			else:
+				fault = "f"
+			fout.write(fault+"  "+name+"/"+pin+"  "+str(gate.level)+"\n")	
+
+		fout.close()
+			
 
 design = sys.argv[1]
 cir = Circuit(design)
