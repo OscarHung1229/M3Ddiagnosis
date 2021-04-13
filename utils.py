@@ -2,7 +2,8 @@ import numpy as np
 import torch
 import dgl
 import dgl.function as fn
-
+import time
+import matplotlib.pyplot as plt
 
 def CreateGraphByFaultSite(cir):
 #     Create edges
@@ -136,9 +137,13 @@ def getLocation(cir, num_nodes):
             
     return location
 
-def getDatasetfromLog(cir, dic, g, num_patterns, num_samples):
+def getDatasetfromLog(cir, design, dic, g, num_patterns, num_samples=-1):
+    print("Start generating data")
+    
+    
     dataset = []
-    f1 = open("ldpc_GNN_inject.dat", "r")
+    dstIDset = []
+    f1 = open(design+"/"+design+"_inject.dat", "r")
     l = f1.readlines()
     f1.close()
     l = l[1:]
@@ -147,7 +152,7 @@ def getDatasetfromLog(cir, dic, g, num_patterns, num_samples):
         words = line.split()
         gname = words[1].split("/")[0]
         pname = words[1].split("/")[1]
-        logname = "ldpc_GNN/Logs/"+gname+"_"+pname+"_st"+words[0]+".log"
+        logname = design+"/Logs/"+gname+"_"+pname+"_st"+words[0]+".log"
 
         dstID = cir.Node[gname+"_"+pname].ID
         label = -1
@@ -169,6 +174,10 @@ def getDatasetfromLog(cir, dic, g, num_patterns, num_samples):
                 success = False
                 break
             pat = int(w2[0])-1
+            
+            if pat >= num_patterns:
+                break
+            
             chname = w2[1]
             loc = int(w2[2])
 
@@ -184,23 +193,40 @@ def getDatasetfromLog(cir, dic, g, num_patterns, num_samples):
             continue
             
         dataset.append((r, label))
+        dstIDset.append(dstID)
+        
         if len(dataset) == num_samples:
             break
-    return dataset
+            
+    print("Finish generating data")
+    return dataset, dstIDset
 
-def getSubgraphs(hg, dataset):
+def getSubgraphs(hg, dataset, dstIDset, debug=False):
+    print("Start generating subgraphs")
     subgraphs = []
+    
     hg = hg.to('cuda')
-    for d, l in dataset:    
+    cnt = 0
+    for d, l in dataset:
+        dstID = dstIDset[cnt]
+        cnt += 1
         with hg.local_scope():
             h = torch.from_numpy(d).to('cuda')
+#             h = torch.from_numpy(d)
+            cols = h.shape[1]
             result = torch.sum(h,dim=0)
             hg.nodes['topNode'].data['h'] = h
             hg['topEdge'].update_all(message_func=fn.copy_u('h','m'), reduce_func=fn.sum('m', 'h'), etype='topEdge')
-            h_N = torch.mul(hg.nodes['faultSite'].data['h'], hg.nodes['faultSite'].data['feats'])
+            h_N = torch.mul(hg.nodes['faultSite'].data['h'], hg.nodes['faultSite'].data['feats'][:,:cols])
             t = torch.all(h_N == result, dim=1).float()
             nid = torch.nonzero(t, as_tuple=True)[0]
             g = hg.subgraph({'faultSite': nid})
+            
+            if debug:
+#                 print(dstID)
+#                 print(g.ndata[dgl.NID]['faultSite'])
+#                 print("\n")
+                assert(dstID in g.ndata[dgl.NID]['faultSite'])
 
             infeats = torch.cat([g.nodes['faultSite'].data['in_degree'], g.nodes['faultSite'].data['out_degree'], g.nodes['faultSite'].data['top_degree']], dim=1)
             infeats = torch.cat([infeats, g.nodes['faultSite'].data['loc']], dim=1)
@@ -215,10 +241,16 @@ def getSubgraphs(hg, dataset):
             g.ndata['infeats'] = infeats
 
             g = g.to('cpu')
+            g = dgl.add_reverse_edges(g)
+            g = dgl.add_self_loop(g)
             subgraphs.append((g, l))
 
         if len(subgraphs)%500 == 0:
             print(len(subgraphs))
 
+            
     hg = hg.to('cpu')
+    torch.cuda.empty_cache()
+
+    print("End generating subgraphs")
     return subgraphs

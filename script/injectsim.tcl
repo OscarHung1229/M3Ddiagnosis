@@ -1,4 +1,4 @@
-proc faultsim_inject {fname} {
+proc faultsim_inject {fname logpath} {
 	set f [open $fname "r"]
 	set cnt 0
 
@@ -13,7 +13,7 @@ proc faultsim_inject {fname} {
 		set arg "$fault $pin"
 		set logname "[lindex [split $pin "/"] 0]_[lindex [split $pin "/"] 1]_st${fault}.log"
 		puts $logname
-		[run_simulation -slow $arg -failure_file Logs/$logname]
+		[run_simulation -slow $arg -failure_file $logpath/$logname]
 	}
 
 	close $f

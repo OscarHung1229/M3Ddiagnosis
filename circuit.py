@@ -486,7 +486,7 @@ class Circuit:
                 if "S" in gate.pins and gate.gtype.startswith("FA"):
                     self.levelize_dfs(gate.pins["S"], level + 1)
 
-    def parseSTIL(self, infile):
+    def parseSTIL(self, infile, npats=-1):
         print("Start parsing STIL patterns")
         begin = time.time()
 
@@ -551,9 +551,10 @@ class Circuit:
 
         # Levelization after parsing scan chains
         self.levelize()
-        self.createGraphByNode()
+#         self.createGraphByNode()
         # self.dumpSTILprefix(infile)
         # self.injectfault()
+        
 
         for line in f:
             if "pattern 0" in line:
@@ -622,20 +623,27 @@ class Circuit:
             if cnt == 0:
                 print("Pass Pattern {0}".format(cnt))
                 continue
-
+            
+            if npats == -2:
+                continue
+                
             if self.test(si, launch, capture, so, cnt, infile, finalpattern):
                 print("Pattern {0} success!".format(cnt))
             else:
                 print("Pattern {0} failed!".format(cnt))
 
-#             if cnt == 1:
-#                 break
+            if cnt == npats:
+                break
+                
+            
 
         f.close()
         endtime = time.time()
         print(
             "End parsing STIL patterns\nCPU time: {0:.2f}s\n".format(
                 endtime - begin))
+        
+        return cnt
 
     def evaluate(self, first):
         cost = 0
@@ -1170,6 +1178,231 @@ class Circuit:
         self.frontier = frontier
         self.wedge = gtype
         return
+    
+        # Verilog Parser
+    def parseHierVerilog(self, infile):
+        print("Start parsing verilog netlist")
+        begin = time.time()
+        f = open(infile, "r")
+        if "die0" in infile:
+            die = 0
+        else:
+            die = 1
+
+        for line in f:
+            if ");" in line:
+                break
+        
+#         Parse Inputs/Outputs/Wires
+        for line in f:
+            if line.startswith("assign"):
+                break
+            words = line.split()
+            if len(words) < 2:
+                continue
+            wtype = words[0]
+            name = words[1]
+            if name in self.Wire:
+                continue
+            newWire = Wire(wtype, name)
+            self.Wire[name] = newWire
+
+        # Direct assign
+        nodeID = len(self.Node)
+        words = line.split()
+        inwire = words[3].strip(";")
+        outwire = words[1]
+        
+        if inwire != outwire:
+            gname = "Dummy_" + outwire
+            newGate = Gate("Dummy", gname, die)
+            nodeName = gname+"_A"
+            newNode = Node(nodeName, self.Wire[inwire], nodeID)
+            nodeID += 1
+            newGate.add_pins("A", self.Wire[inwire], newNode)
+            self.Wire[inwire].connect(newGate, "OUT", newNode)
+            self.Node[nodeName] = newNode
+
+            nodeName = gname+"_Z"
+            newNode = Node(nodeName, self.Wire[outwire], nodeID)
+            nodeID += 1
+            newGate.add_pins("Z", self.Wire[outwire], newNode)
+            self.Wire[outwire].connect(newGate, "IN", newNode)
+            self.Gate[gname] = newGate
+            self.Node[nodeName] = newNode
+            
+        
+        for line in f:
+            if "assign" not in line:
+                break
+            words = line.split()
+            inwire = words[3].strip(";")
+            outwire = words[1]
+            if inwire == outwire:
+                continue
+
+            gname = "Dummy_" + outwire
+            newGate = Gate("Dummy", gname, die)
+            nodeName = gname+"_A"
+            newNode = Node(nodeName, self.Wire[inwire], nodeID)
+            nodeID += 1
+            newGate.add_pins("A", self.Wire[inwire], newNode)
+            self.Wire[inwire].connect(newGate, "OUT", newNode)
+            self.Node[nodeName] = newNode
+            
+            nodeName = gname+"_Z"
+            newNode = Node(nodeName, self.Wire[outwire], nodeID)
+            nodeID += 1
+            newGate.add_pins("Z", self.Wire[outwire], newNode)
+            self.Wire[outwire].connect(newGate, "IN", newNode)
+            self.Gate[gname] = newGate
+            self.Node[nodeName] = newNode
+
+        i = 0
+        # Parse Gates
+        l = ""
+        for line in f:
+            if not line:
+                continue
+            elif "endmodule" in line:
+                break
+            l += line.strip()
+            if ";" not in line:
+                continue
+
+            gtype = l.split()[0]
+            name = l.split()[1]
+            newGate = Gate(gtype, name, die)
+            pins = l.split(",")
+            for p in pins:
+                idx1 = p.find(".")
+                idx2 = p.find("(", idx1)
+                idx3 = p.find(")", idx2)
+
+                ptype = p[idx1 + 1:idx2].strip()
+                wire = p[idx2 + 1:idx3].strip()
+                nodeName = name+"_"+ptype
+                newNode = Node(nodeName, self.Wire[wire], nodeID)
+                nodeID += 1
+                self.Node[nodeName] = newNode
+                newGate.add_pins(ptype, self.Wire[wire], newNode)
+                if "Z" in ptype:
+                    self.Wire[wire].connect(newGate, "IN", newNode)
+                elif "CO" in ptype:
+                    self.Wire[wire].connect(newGate, "IN", newNode)
+                elif "Q" in ptype:
+                    self.Wire[wire].connect(newGate, "IN", newNode)
+                elif ptype == "S" and gtype.startswith("FA"):
+                    self.Wire[wire].connect(newGate, "IN", newNode)
+                else:
+                    self.Wire[wire].connect(newGate, "OUT", newNode)
+                
+
+            self.Gate[name] = newGate
+            l = ""
+
+        f.close()
+        print("nodeID: " + str(nodeID))
+
+        end = time.time()
+        print(
+            "End parsing verilog netlist\nCPU time: {0:.2f}s\n".format(
+                end -
+                begin))
+    
+    def parseTop(self, infile):
+        print("Start parsing top verilog netlist")
+        begin = time.time()
+        f = open(infile, "r")
+        nodeID = len(self.Node)
+        MIV = []
+        
+        for line in f:
+            if line.startswith("die0"):
+                break
+            elif not line.startswith("wire"):
+                continue
+            
+            gname = "MIV_" + line.split()[1]
+            newGate = Gate("MIV", gname, 2)
+            self.Gate[gname] = newGate
+            MIV.append(gname)
+            
+#         die0
+        for line in f:
+            if line.startswith(");"):
+                break
+            name_in_module = line.strip().split()[0].strip(".")
+            MIVname = "MIV_" + line.split()[2]
+            if "TSV" not in MIVname:
+                continue
+            
+            w = self.Wire[name_in_module]
+            g = self.Gate[MIVname]
+            if w.wtype == "input":
+                nodeName = MIVname+"_Z"
+                newNode = Node(nodeName, w, nodeID)
+                nodeID += 1
+                g.add_pins("Z", w, newNode)
+                w.connect(g, "IN", newNode)
+                w.wtype = "wire"
+                self.Node[nodeName] = newNode
+                
+            elif w.wtype == "output":
+                nodeName = MIVname+"_A"
+                newNode = Node(nodeName, w, nodeID)
+                nodeID += 1
+                g.add_pins("A", w, newNode)
+                w.connect(g, "OUT", newNode)
+                w.wtype = "wire"
+                self.Node[nodeName] = newNode
+                
+            else:
+                print("Wire {} in die0, not input nor output".format(w.name))
+       
+        for line in f:
+            if line.startswith("die1"):
+                break
+                
+#         die1
+        for line in f:
+            if line.startswith(");"):
+                break
+                
+            name_in_module = line.strip().split()[0].strip(".")
+            MIVname = "MIV_" + line.split()[2]
+            if "TSV" not in MIVname:
+                continue
+            
+            w = self.Wire[name_in_module]
+            g = self.Gate[MIVname]
+            if w.wtype == "input":
+                nodeName = MIVname+"_Z"
+                newNode = Node(nodeName, w, nodeID)
+                nodeID += 1
+                g.add_pins("Z", w, newNode)
+                w.connect(g, "IN", newNode)
+                self.Node[nodeName] = newNode
+                
+            elif w.wtype == "output":
+                nodeName = MIVname+"_A"
+                newNode = Node(nodeName, w, nodeID)
+                nodeID += 1
+                g.add_pins("A", w, newNode)
+                w.connect(g, "OUT", newNode)
+                self.Node[nodeName] = newNode
+                
+            else:
+                print("Wire {} in die1, not input nor output".format(w.name))
+                
+            
+            
+        
+        end = time.time()
+        print(
+            "End parsing verilog netlist\nCPU time: {0:.2f}s\n".format(
+                end -
+                begin))
     
 
 # design = sys.argv[1]
