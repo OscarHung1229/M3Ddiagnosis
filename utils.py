@@ -99,60 +99,97 @@ def getLocation(cir, num_nodes):
         idx = node.name.rfind("_")
         gate = node.name[:idx]
         pin = node.name[idx+1:]
-
-        wire = node.net
-        faningate = wire.fanin
-        loc = -1
-
-        if faningate == 0:
-            loc = 0
-        else:
-        #     Output pin of a gate
-            if faningate == cir.Gate[gate]:
-                die_in = faningate.die
-                cnt = 0
-                for fo in wire.fanout:
-                    if fo.die == die_in:
-                        cnt += 1
-                        break
-
-                if cnt > 0:
-                    loc = die_in
-                else:
-                    loc = 2
-            else:
-                if faningate.die == cir.Gate[gate].die:
-                    loc = faningate.die
-                else:
-                    loc = 2
-
-        if loc == 0:
+        
+        
+        if cir.Gate[gate].die == 0:
             location[ID] = torch.tensor([1,0,0])
-        elif loc == 1:
+        elif cir.Gate[gate].die == 1:
             location[ID] = torch.tensor([0,1,0])
-        elif loc == 2:
+        elif cir.Gate[gate].die == 2:
             location[ID] = torch.tensor([0,0,1])
-        else:
-            assert(False)
+
+#         wire = node.net
+#         faningate = wire.fanin
+#         loc = -1
+
+#         if faningate == 0:
+#             loc = 0
+#         else:
+#         #     Output pin of a gate
+#             if faningate == cir.Gate[gate]:
+#                 die_in = faningate.die
+#                 cnt = 0
+#                 for fo in wire.fanout:
+#                     if fo.die == die_in:
+#                         cnt += 1
+#                         break
+
+#                 if cnt > 0:
+#                     loc = die_in
+#                 else:
+#                     loc = 2
+#             else:
+#                 if faningate.die == cir.Gate[gate].die:
+#                     loc = faningate.die
+#                 else:
+#                     loc = 2
+
+#         if loc == 0:
+#             location[ID] = torch.tensor([1,0,0])
+#         elif loc == 1:
+#             location[ID] = torch.tensor([0,1,0])
+#         elif loc == 2:
+#             location[ID] = torch.tensor([0,0,1])
+#         else:
+#             assert(False)
             
     return location
 
-def getDatasetfromLog(cir, design, dic, g, num_patterns, num_samples=-1):
+def addfeatures(cir, num_nodes):
+    feat = torch.zeros((num_nodes, 2))
+    for n in cir.Node:
+        node = cir.Node[n]
+        ID = node.ID
+        idx = node.name.rfind("_")
+        gate = node.name[:idx]
+        pin = node.name[idx+1:]
+
+        
+        
+        wire = node.net
+        if wire in cir.Gate[gate].outpin:
+            feat[ID][0] = 1
+            
+        if "MIV" in gate:
+            feat[ID][1] = 1
+        else:
+            for fo in wire.fanout:
+                if fo.die == 2:
+                    feat[ID][1] = 1
+                    break
+            
+    return feat
+
+
+
+def getDatasetfromLog(cir, design, dic, g, num_patterns, num_samples=-1, start_pat=0, end_pat=-1):
     print("Start generating data")
     
     
     dataset = []
     dstIDset = []
-    f1 = open(design+"/"+design+"_inject.dat", "r")
+#     f1 = open(design+"/"+design+"_inject_extra.dat", "r")
+    f1 = open(design+"/unique.dat", "r")
     l = f1.readlines()
     f1.close()
     l = l[1:]
+    
 
     for line in l:
         words = line.split()
         gname = words[1].split("/")[0]
         pname = words[1].split("/")[1]
-        logname = design+"/Logs/"+gname+"_"+pname+"_st"+words[0]+".log"
+        logname = design+"/Logs_w_MIV/"+gname+"_"+pname+"_st"+words[0]+".log"
 
         dstID = cir.Node[gname+"_"+pname].ID
         label = -1
@@ -166,7 +203,9 @@ def getDatasetfromLog(cir, design, dic, g, num_patterns, num_samples=-1):
         f2 = open(logname, "r")
         l2 = f2.readlines()[1:]
         f2.close()
-        r = np.zeros((g.number_of_nodes('topNode'), num_patterns), dtype=np.dtype('float32'))
+        num_pat = end_pat-start_pat
+        r = np.zeros((g.number_of_nodes('topNode'), num_pat), dtype=np.dtype('float32'))
+#         r = np.zeros((g.number_of_nodes('topNode'), num_patterns), dtype=np.dtype('float32'))
         success = True
         for fault in l2:
             w2 = fault.split()
@@ -175,7 +214,12 @@ def getDatasetfromLog(cir, design, dic, g, num_patterns, num_samples=-1):
                 break
             pat = int(w2[0])-1
             
-            if pat >= num_patterns:
+#             if pat >= num_patterns:
+#                 break
+            if pat < start_pat:
+                continue
+            
+            if pat >= end_pat:
                 break
             
             chname = w2[1]
@@ -185,7 +229,7 @@ def getDatasetfromLog(cir, design, dic, g, num_patterns, num_samples=-1):
             chain = cir.scanchains[cir.sopin.index(chname)]
             gname = chain[::-1][loc].name
             srcID = dic[gname]
-            r[srcID][pat] = 1.0
+            r[srcID][pat-start_pat] = 1.0
 
         if not success:
             continue
@@ -201,23 +245,24 @@ def getDatasetfromLog(cir, design, dic, g, num_patterns, num_samples=-1):
     print("Finish generating data")
     return dataset, dstIDset
 
-def getSubgraphs(hg, dataset, dstIDset, debug=False):
+def getSubgraphs(hg, dataset, dstIDset, debug=False, start_pat=0, end_pat=-1):
     print("Start generating subgraphs")
     subgraphs = []
     
-    hg = hg.to('cuda')
+#     hg = hg.to('cuda')
     cnt = 0
     for d, l in dataset:
+#         hg = hg.to('cuda')
         dstID = dstIDset[cnt]
         cnt += 1
         with hg.local_scope():
-            h = torch.from_numpy(d).to('cuda')
-#             h = torch.from_numpy(d)
-            cols = h.shape[1]
+#             h = torch.from_numpy(d).to('cuda')
+            h = torch.from_numpy(d)
+#             cols = h.shape[1]
             result = torch.sum(h,dim=0)
             hg.nodes['topNode'].data['h'] = h
             hg['topEdge'].update_all(message_func=fn.copy_u('h','m'), reduce_func=fn.sum('m', 'h'), etype='topEdge')
-            h_N = torch.mul(hg.nodes['faultSite'].data['h'], hg.nodes['faultSite'].data['feats'][:,:cols])
+            h_N = torch.mul(hg.nodes['faultSite'].data['h'], hg.nodes['faultSite'].data['feats'][:,start_pat:end_pat])
             t = torch.all(h_N == result, dim=1).float()
             nid = torch.nonzero(t, as_tuple=True)[0]
             g = hg.subgraph({'faultSite': nid})
@@ -231,6 +276,7 @@ def getSubgraphs(hg, dataset, dstIDset, debug=False):
             infeats = torch.cat([g.nodes['faultSite'].data['in_degree'], g.nodes['faultSite'].data['out_degree'], g.nodes['faultSite'].data['top_degree']], dim=1)
             infeats = torch.cat([infeats, g.nodes['faultSite'].data['loc']], dim=1)
             infeats = torch.cat([infeats, g.nodes['faultSite'].data['level']], dim=1)
+            infeats = torch.cat([infeats, g.nodes['faultSite'].data['more']], dim=1)
             infeats = torch.cat([infeats, g.in_degrees(etype='net').view(-1,1).float()], dim=1)
             infeats = torch.cat([infeats, g.out_degrees(etype='net').view(-1,1).float()], dim=1)
 
@@ -240,17 +286,19 @@ def getSubgraphs(hg, dataset, dstIDset, debug=False):
     #         g.nodes['faultSite'].data['infeats'] = infeats
             g.ndata['infeats'] = infeats
 
-            g = g.to('cpu')
-            g = dgl.add_reverse_edges(g)
+#             g = g.to('cpu')
+#             g = dgl.add_reverse_edges(g)
             g = dgl.add_self_loop(g)
             subgraphs.append((g, l))
+        
+#         torch.cuda.empty_cache()
 
         if len(subgraphs)%500 == 0:
             print(len(subgraphs))
 
             
-    hg = hg.to('cpu')
-    torch.cuda.empty_cache()
+#     hg = hg.to('cpu')
+#     torch.cuda.empty_cache()
 
     print("End generating subgraphs")
     return subgraphs

@@ -243,6 +243,7 @@ class Wire:
                 self.prob = float(v)
         else:
             self.v2 = v
+            
 
 
 class Circuit:
@@ -877,13 +878,6 @@ class Circuit:
             f_so.append(l_so[::-1])
 
         for w in self.Wire:
-#             self.Wire[w].feats.append(self.Wire[w].value)
-#             if self.Wire[w].value == 1 or self.Wire[w].value == 3:
-#                 self.Wire[w].feats.append(1.0)
-#             elif self.Wire[w].value == 0 or self.Wire[w].value == 4:
-#                 self.Wire[w].feats.append(0.0)
-#             else:
-#                 self.Wire[w].feats.append(0.5)
             if self.Wire[w].value >= 3:
                 self.Wire[w].feats.append(1.0)
             else:
