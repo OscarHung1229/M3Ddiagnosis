@@ -4,6 +4,7 @@ import dgl
 import dgl.function as fn
 import time
 import matplotlib.pyplot as plt
+import random
 
 def CreateGraphByFaultSite(cir):
 #     Create edges
@@ -14,16 +15,51 @@ def CreateGraphByFaultSite(cir):
         innode = wire.innode
         if innode == 0:
             continue
+            
         srcID = innode.ID
         
-        for onode in wire.outnode:
+        if wire.fanin != 0 and wire.fanin.gtype == "Dummy":
+            inwire = wire.fanin.pins["A"]
+            while True:
+                if inwire.fanin != 0 and inwire.fanin.gtype == "Dummy":
+                    inwire = inwire.fanin.pins["A"]
+                else:
+                    break
+                    
+            if inwire.innode == 0:
+                continue
+            srcID = inwire.innode.ID            
+        
+        for i in range(len(wire.outnode)):
+            onode = wire.outnode[i]
+            ogate = wire.fanout[i]
+            if ogate.gtype == "Dummy":
+                continue
+            elif ogate.gtype == "MIV":
+                onode = ogate.outnode[0]
             dstID = onode.ID
             edge.append((srcID,dstID))
             
-#     Connect fanin to fanout in a gate
+    #     Connect fanin to fanout in a gate
     for g in cir.Gate:
         gate = cir.Gate[g]
         if "SDFF" in gate.gtype:
+            continue
+        
+        elif "Dummy" in gate.gtype:
+            for name in gate.nodes:
+                if gate.nodes[name] in gate.outnode:
+                    dstID = gate.nodes[name].ID
+                else:
+                    srcID = gate.nodes[name].ID
+            edge.append((srcID,dstID))
+            continue
+            
+        elif "MIV" in gate.gtype:
+            for name in gate.nodes:
+                if gate.nodes[name] not in gate.outnode:
+                    dstID = gate.nodes[name].ID
+                    edge.append((dstID,dstID))
             continue
             
         for n in gate.outnode:
@@ -42,7 +78,7 @@ def backprop_dfs(cir, w, srcID, topEdge, site_flag):
     g = w.fanin
     if "SDFF" in g.gtype:
         return
-
+    
     if len(g.outpin) == 2 and w == g.outpin[1]:
         dstID = g.outnode[1].ID
         if site_flag[dstID] == 1:
@@ -53,7 +89,8 @@ def backprop_dfs(cir, w, srcID, topEdge, site_flag):
         dstID = g.outnode[0].ID
         if site_flag[dstID] == 1:
             return
-        topEdge.append((srcID, dstID))
+        if g.gtype != "Dummy":
+            topEdge.append((srcID, dstID))
         site_flag[dstID] = 1
         
     for n in g.pins:
@@ -62,21 +99,23 @@ def backprop_dfs(cir, w, srcID, topEdge, site_flag):
             if site_flag[dstID] == 1:
                 continue
             else:
-                topEdge.append((srcID, dstID))
+                if g.gtype != "Dummy" and g.gtype != "MIV":
+                    topEdge.append((srcID, dstID))
                 site_flag[dstID] = 1
                 backprop_dfs(cir, g.pins[n], srcID, topEdge, site_flag)
                 
-def backprop(cir):
+def backprop(cir, dfs=True):
     dist = {}
     topEdge = []
     topNodeID = 0
     for sc in cir.scanchains:
         for gate in sc:
             dist[gate.name] = topNodeID
-            dstID = cir.Node[gate.name+"_D"].ID
-            topEdge.append((topNodeID, dstID))
-            site_flag = np.zeros(len(cir.Node))
-            backprop_dfs(cir, gate.pins["D"], topNodeID, topEdge, site_flag)
+            if dfs:
+                dstID = cir.Node[gate.name+"_D"].ID
+                topEdge.append((topNodeID, dstID))
+                site_flag = np.zeros(len(cir.Node))
+                backprop_dfs(cir, gate.pins["D"], topNodeID, topEdge, site_flag)
             topNodeID += 1
             
     return dist, topEdge
@@ -172,24 +211,36 @@ def addfeatures(cir, num_nodes):
 
 
 
-def getDatasetfromLog(cir, design, dic, g, num_patterns, num_samples=-1, start_pat=0, end_pat=-1):
+def getDatasetfromLog(cir, design, dic, g, num_patterns, num_samples=-1, start_pat=0, end_pat=-1, shuffle=True):
     print("Start generating data")
     
     
     dataset = []
     dstIDset = []
 #     f1 = open(design+"/"+design+"_inject_extra.dat", "r")
-    f1 = open(design+"/unique.dat", "r")
+    if cir.design == "ldpc_GNN" or cir.design == "tate_GNN":
+        f1 = open(design+"/unique.dat", "r")
+    else:
+        f1 = open(design+"/TDF_600_inject.dat", "r")
     l = f1.readlines()
     f1.close()
     l = l[1:]
-    
+    if shuffle:
+        random.shuffle(l)
 
     for line in l:
         words = line.split()
         gname = words[1].split("/")[0]
         pname = words[1].split("/")[1]
-        logname = design+"/Logs_w_MIV/"+gname+"_"+pname+"_st"+words[0]+".log"
+        if cir.design == "ldpc_GNN" or cir.design == "tate_GNN":
+            logname = design+"/Logs_w_MIV/"+gname+"_"+pname+"_st"+words[0]+".log"
+        else:
+            logname = design+"/Logs_w_MIV_TDF_600/"+gname+"_"+pname+"_st"+words[0]+".log"
+        
+        if words[1].split("/")[-1] == "nextstate":
+            pname = "D"
+        elif words[1].split("/")[-1] == "IQ":
+            pname = "Q"
 
         dstID = cir.Node[gname+"_"+pname].ID
         label = -1
@@ -203,19 +254,19 @@ def getDatasetfromLog(cir, design, dic, g, num_patterns, num_samples=-1, start_p
         f2 = open(logname, "r")
         l2 = f2.readlines()[1:]
         f2.close()
+
+        
         num_pat = end_pat-start_pat
-        r = np.zeros((g.number_of_nodes('topNode'), num_pat), dtype=np.dtype('float32'))
-#         r = np.zeros((g.number_of_nodes('topNode'), num_patterns), dtype=np.dtype('float32'))
         success = True
+        subnodes = []
         for fault in l2:
             w2 = fault.split()
             if len(w2) != 5:
+#                 continue
                 success = False
                 break
             pat = int(w2[0])-1
-            
-#             if pat >= num_patterns:
-#                 break
+
             if pat < start_pat:
                 continue
             
@@ -229,15 +280,47 @@ def getDatasetfromLog(cir, design, dic, g, num_patterns, num_samples=-1, start_p
             chain = cir.scanchains[cir.sopin.index(chname)]
             gname = chain[::-1][loc].name
             srcID = dic[gname]
-            r[srcID][pat-start_pat] = 1.0
+            
+            tmpnodes =  g.successors(srcID, etype=('topNode', 'topEdge', 'faultSite')).numpy()
+        
+            if len(subnodes):
+                tmpnodes = np.intersect1d(subnodes, tmpnodes)
+                
+            subnodes = np.array([idx for idx in tmpnodes if g.nodes['faultSite'].data['feats'][idx][pat-start_pat] == 1.0])
+
+            if not len(subnodes):
+                break
+
 
         if not success:
             continue
-        if not np.count_nonzero(r):
+        if not len(subnodes):
+            print("No candidates!!!, {}".format(logname))
             continue
+        
+        with g.local_scope():
+            sg = g.subgraph({'faultSite': subnodes})
+
+            assert(dstID in sg.ndata[dgl.NID]['faultSite'])
+
+            infeats = torch.cat([sg.nodes['faultSite'].data['in_degree'], sg.nodes['faultSite'].data['out_degree'], sg.nodes['faultSite'].data['top_degree']], dim=1)
+            infeats = torch.cat([infeats, sg.nodes['faultSite'].data['loc']], dim=1)
+            infeats = torch.cat([infeats, sg.nodes['faultSite'].data['level']], dim=1)
+            infeats = torch.cat([infeats, sg.nodes['faultSite'].data['more']], dim=1)
+            infeats = torch.cat([infeats, sg.in_degrees(etype='net').view(-1,1).float()], dim=1)
+            infeats = torch.cat([infeats, sg.out_degrees(etype='net').view(-1,1).float()], dim=1)
+
+            sg = dgl.to_homogeneous(sg)
+            sg = dgl.add_reverse_edges(sg)
+            sg.ndata['infeats'] = infeats
             
-        dataset.append((r, label))
+        sg = dgl.add_self_loop(sg)
+        
+        dataset.append((sg, label))
         dstIDset.append(dstID)
+        
+        if len(dataset)%50 == 0:
+            print(len(dataset))
         
         if len(dataset) == num_samples:
             break
@@ -281,9 +364,9 @@ def getSubgraphs(hg, dataset, dstIDset, debug=False, start_pat=0, end_pat=-1):
             infeats = torch.cat([infeats, g.out_degrees(etype='net').view(-1,1).float()], dim=1)
 
             g = dgl.to_homogeneous(g)
-    #         g = dgl.add_self_loop(g)
-    #         g = dgl.add_reverse_edges(g)
-    #         g.nodes['faultSite'].data['infeats'] = infeats
+#             g = dgl.add_self_loop(g)
+            g = dgl.add_reverse_edges(g)
+#             g.nodes['faultSite'].data['infeats'] = infeats
             g.ndata['infeats'] = infeats
 
 #             g = g.to('cpu')
@@ -291,7 +374,7 @@ def getSubgraphs(hg, dataset, dstIDset, debug=False, start_pat=0, end_pat=-1):
             g = dgl.add_self_loop(g)
             subgraphs.append((g, l))
         
-#         torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
 
         if len(subgraphs)%500 == 0:
             print(len(subgraphs))
@@ -302,3 +385,91 @@ def getSubgraphs(hg, dataset, dstIDset, debug=False, start_pat=0, end_pat=-1):
 
     print("End generating subgraphs")
     return subgraphs
+
+def getDatasetfromLogSep(cir, design, dic, g, num_patterns, num_samples=-1, start_pat=0, end_pat=-1, shuffle=True):
+    print("Start generating data")
+    
+    
+    dataset = []
+    dstIDset = []
+    if cir.design == "ldpc_GNN" or cir.design == "tate_GNN":
+        f1 = open(design+"/unique.dat", "r")
+    else:
+        f1 = open(design+"/TDF_inject.dat", "r")
+    l = f1.readlines()
+    f1.close()
+    l = l[1:]
+    if shuffle:
+        random.shuffle(l)
+
+    for line in l:
+        words = line.split()
+        gname = words[1].split("/")[0]
+        pname = words[1].split("/")[1]
+        if cir.design == "ldpc_GNN" or cir.design == "tate_GNN":
+            logname = design+"/Logs_w_MIV/"+gname+"_"+pname+"_st"+words[0]+".log"
+        else:
+            logname = design+"/Logs_w_MIV_TDF_600/"+gname+"_"+pname+"_st"+words[0]+".log"
+        
+        if words[1].split("/")[-1] == "nextstate":
+            pname = "D"
+        elif words[1].split("/")[-1] == "IQ":
+            pname = "Q"
+
+        dstID = cir.Node[gname+"_"+pname].ID
+        label = -1
+        if g.nodes['faultSite'].data['loc'][dstID][0] == 1:
+            label = 0
+        elif g.nodes['faultSite'].data['loc'][dstID][1] == 1:
+            label = 1
+        else:
+            label = 2
+            
+        num_pat = end_pat-start_pat
+        r = np.zeros((g.number_of_nodes('topNode'), num_pat), dtype=np.dtype('float32'))
+            
+        f2 = open(logname, "r")
+        l2 = f2.readlines()[1:]
+        f2.close()
+        
+        num_pat = end_pat-start_pat
+        success = True
+        subnodes = []
+        for fault in l2:
+            w2 = fault.split()
+            if len(w2) != 5:
+                success = False
+                break
+            pat = int(w2[0])-1
+            
+#             if pat >= num_patterns:
+#                 break
+            if pat < start_pat:
+                continue
+            
+            if pat >= end_pat:
+                break
+            
+            chname = w2[1]
+            loc = int(w2[2])
+
+
+            chain = cir.scanchains[cir.sopin.index(chname)]
+            gname = chain[::-1][loc].name
+            srcID = dic[gname]
+            r[srcID][pat-start_pat] = 1.0
+
+        if not success:
+            continue
+        if not np.count_nonzero(r):
+            print("No candidates!!!, {}".format(logname))
+            continue
+        
+        dataset.append((r, label))
+        dstIDset.append(dstID)
+        
+        if len(dataset) == num_samples:
+            break
+            
+    print("Finish generating data")
+    return dataset, dstIDset
