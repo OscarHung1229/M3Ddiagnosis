@@ -269,6 +269,7 @@ class Circuit:
         self.frontier = []  # For GNN frontier
         self.wedge = []
         self.Node = {}
+        self.Nodelist = []
 
     def debug(self):
         cnt0 = 0
@@ -1216,6 +1217,7 @@ class Circuit:
             newGate.add_pins("A", self.Wire[inwire], newNode)
             self.Wire[inwire].connect(newGate, "OUT", newNode)
             self.Node[nodeName] = newNode
+            self.Nodelist.append(newNode)
 
             nodeName = gname+"_Z"
             newNode = Node(nodeName, self.Wire[outwire], nodeID)
@@ -1224,6 +1226,7 @@ class Circuit:
             self.Wire[outwire].connect(newGate, "IN", newNode)
             self.Gate[gname] = newGate
             self.Node[nodeName] = newNode
+            self.Nodelist.append(newNode)
             
         
         for line in f:
@@ -1243,6 +1246,7 @@ class Circuit:
             newGate.add_pins("A", self.Wire[inwire], newNode)
             self.Wire[inwire].connect(newGate, "OUT", newNode)
             self.Node[nodeName] = newNode
+            self.Nodelist.append(newNode)
             
             nodeName = gname+"_Z"
             newNode = Node(nodeName, self.Wire[outwire], nodeID)
@@ -1251,6 +1255,7 @@ class Circuit:
             self.Wire[outwire].connect(newGate, "IN", newNode)
             self.Gate[gname] = newGate
             self.Node[nodeName] = newNode
+            self.Nodelist.append(newNode)
 
         i = 0
         # Parse Gates
@@ -1279,6 +1284,7 @@ class Circuit:
                 newNode = Node(nodeName, self.Wire[wire], nodeID)
                 nodeID += 1
                 self.Node[nodeName] = newNode
+                self.Nodelist.append(newNode)
                 newGate.add_pins(ptype, self.Wire[wire], newNode)
                 if "Z" in ptype:
                     self.Wire[wire].connect(newGate, "IN", newNode)
@@ -1341,6 +1347,7 @@ class Circuit:
                 w.connect(g, "IN", newNode)
                 w.wtype = "wire"
                 self.Node[nodeName] = newNode
+                self.Nodelist.append(newNode)
                 
             elif w.wtype == "output":
                 nodeName = MIVname+"_A"
@@ -1350,6 +1357,7 @@ class Circuit:
                 w.connect(g, "OUT", newNode)
                 w.wtype = "wire"
                 self.Node[nodeName] = newNode
+                self.Nodelist.append(newNode)
                 
             else:
                 print("Wire {} in die0, not input nor output".format(w.name))
@@ -1377,6 +1385,7 @@ class Circuit:
                 g.add_pins("Z", w, newNode)
                 w.connect(g, "IN", newNode)
                 self.Node[nodeName] = newNode
+                self.Nodelist.append(newNode)
                 
             elif w.wtype == "output":
                 nodeName = MIVname+"_A"
@@ -1385,6 +1394,7 @@ class Circuit:
                 g.add_pins("A", w, newNode)
                 w.connect(g, "OUT", newNode)
                 self.Node[nodeName] = newNode
+                self.Nodelist.append(newNode)
                 
             else:
                 print("Wire {} in die1, not input nor output".format(w.name))

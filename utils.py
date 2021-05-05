@@ -5,6 +5,7 @@ import dgl.function as fn
 import time
 import matplotlib.pyplot as plt
 import random
+import os.path
 
 def CreateGraphByFaultSite(cir):
 #     Create edges
@@ -241,6 +242,9 @@ def getDatasetfromLog(cir, design, dic, g, num_patterns, num_samples=-1, start_p
             pname = "D"
         elif words[1].split("/")[-1] == "IQ":
             pname = "Q"
+            
+        if gname.startswith("MIV") and pname == "A":
+            pname = "Z"
 
         dstID = cir.Node[gname+"_"+pname].ID
         label = -1
@@ -250,6 +254,9 @@ def getDatasetfromLog(cir, design, dic, g, num_patterns, num_samples=-1, start_p
             label = 1
         else:
             label = 2
+            
+        if not os.path.isfile(logname):
+            continue
             
         f2 = open(logname, "r")
         l2 = f2.readlines()[1:]
@@ -319,7 +326,7 @@ def getDatasetfromLog(cir, design, dic, g, num_patterns, num_samples=-1, start_p
         dataset.append((sg, label))
         dstIDset.append(dstID)
         
-        if len(dataset)%50 == 0:
+        if len(dataset)%5 == 0:
             print(len(dataset))
         
         if len(dataset) == num_samples:
